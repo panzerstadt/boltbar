@@ -53,6 +53,9 @@ struct Preferences: Codable {
     var shortcutKey: UInt32 = 49
     var shortcutModifiers: UInt32 = 2048 // Carbon optionKey
     var shortcutLabel = "⌥ Space"
+    var attachShortcutKey: UInt32 = 49
+    var attachShortcutModifiers: UInt32 = 2560 // option + shift
+    var attachShortcutLabel = "⌥⇧ Space"
     func model(_ provider: Provider) -> String { models[provider.rawValue] ?? (provider == .openai ? "gpt-6.1-sol" : provider.defaults[0]) }
     func transport(_ provider: Provider) -> Transport { transports[provider.rawValue] ?? .automatic }
 }

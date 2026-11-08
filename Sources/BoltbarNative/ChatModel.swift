@@ -90,6 +90,7 @@ import SwiftUI
     var resize: ((NSSize) -> Void)?
     var openSettings: (() -> Void)?
     var presentFilePicker: (() -> Void)?
+    var attachFrontmostDocument: (() -> Void)?
     var presentFolderPicker: (() -> Void)?
     var newConversation: (() -> Void)?
     var focusComposer: (() -> Void)?
@@ -97,6 +98,7 @@ import SwiftUI
     var applyLayout: ((PanelLayout) -> Void)?
     var resizeOrigin: NSPoint?
     var updateShortcut: ((UInt32, UInt32, String) -> Bool)?
+    var updateAttachShortcut: ((UInt32, UInt32, String) -> Bool)?
     var clock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     static let interruptDelay: TimeInterval = 0.6
     private var lastQueued = -TimeInterval.infinity
@@ -364,7 +366,7 @@ import SwiftUI
 
     // MARK: Help and commands
 
-    static let commands = ["/help", "/new", "/agent", "/terminal"]
+    static let commands = ["/help", "/new", "/agent", "/terminal", "/attach"]
     /// Commands run locally and are never sent to a model.
     private func runCommand(_ text: String) -> Bool {
         switch text.lowercased() {
@@ -372,6 +374,7 @@ import SwiftUI
         case "/new": newConversation?()
         case "/agent": toggleAgentMode()
         case "/terminal": copyTerminalCommand()
+        case "/attach": attachCurrentFile()
         default: return false
         }
         return true
@@ -762,6 +765,9 @@ import SwiftUI
     }
     func pickFiles() {
         presentFilePicker?()
+    }
+    func attachCurrentFile() {
+        attachFrontmostDocument?()
     }
     func receive(_ pasteboard: NSPasteboard) -> Bool {
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {

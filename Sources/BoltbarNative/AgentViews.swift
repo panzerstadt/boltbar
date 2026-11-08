@@ -186,6 +186,7 @@ struct ToolRoll: View {
                     .frame(width: 30, height: 30).background(theme.surface, in: Circle())
             }.buttonStyle(.plain).accessibilityLabel("Attach files").help("Attach images, PDFs or text files")
             if open || model.webSearchActive { globe.transition(.opacity.combined(with: .move(edge: .leading))) }
+            if open { attach.transition(.opacity.combined(with: .move(edge: .leading))) }
             if open { history.transition(.opacity.combined(with: .move(edge: .leading))) }
         }
         .contentShape(Rectangle())
@@ -204,6 +205,11 @@ struct ToolRoll: View {
         }.buttonStyle(.plain).disabled(!model.canSearchWeb || model.streaming || model.agentMode)
             .accessibilityLabel("Search the web").accessibilityValue(model.webSearchActive ? "On" : "Off")
             .help(model.agentMode ? "Web search is off in agent mode" : model.canSearchWeb ? (model.webSearch ? "Web access on · searches when needed" : "Allow web search · remembers your choice") : "Web search with Codex requires an OpenAI API key")
+    }
+    private var attach: some View {
+        Button { model.attachCurrentFile() } label: {
+            Image(systemName: "doc.on.clipboard").font(.system(size: 14)).foregroundStyle(.secondary).frame(width: 30, height: 30)
+        }.buttonStyle(.plain).help("Attach the frontmost app's current document").accessibilityLabel("Attach current file")
     }
     private var history: some View {
         Button { model.showingModelPicker = false; model.showHistory() } label: {
@@ -288,6 +294,7 @@ enum HelpContent {
     static let commands: [(command: String, summary: String)] = [
         ("/help", "Everything about Boltbar"), ("/new", "Start a new chat"), ("/agent", "Turn agent mode on or off"),
         ("/terminal", "Copy the command that continues this agent chat in a terminal"),
+        ("/attach", "Attach the frontmost app's current document"),
     ]
     static func markdown(_ agentShortcut: String) -> String {
         """
@@ -337,6 +344,7 @@ enum HelpContent {
         | /new | Start a new chat |
         | /agent | Turn agent mode on or off |
         | /terminal | Copy the command that continues this agent chat in a terminal |
+        | /attach | Attach the frontmost app's current document (Accessibility permission) |
 
         ## Attachments and web
         Paste, drop or pick images, PDFs and text files; they stay with the message for follow-ups. Hover + for the globe, which lets the model search the web with numbered sources, and your previous chats.

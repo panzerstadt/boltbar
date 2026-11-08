@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Carbon
+import ApplicationServices
 
 final class ChatPanel: NSPanel {
     var onHide: (() -> Void)?
@@ -18,6 +19,7 @@ final class ChatPanel: NSPanel {
     var settings: NSWindow?
     var status: NSStatusItem!
     var hotkey: EventHotKeyRef?
+    var attachHotkey: EventHotKeyRef?
     var hotkeyHandler: EventHandlerRef?
     private var catalogTimer: Timer?
     private var layoutTimer: Timer?
@@ -26,12 +28,15 @@ final class ChatPanel: NSPanel {
     private var layoutAnchor: (top: NSPoint, chrome: CGFloat)?
     private var buyLicenseItem: NSMenuItem?
     private var attachmentPicker: NSOpenPanel?
+    private var lastExternalApp: NSRunningApplication?
     private var lastPanelSize = NSSize(width: 700, height: 107)
     private var bottomAnchor: CGFloat?
     private var adjustingAnchor = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(appActivated(_:)), name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        if let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier != Bundle.main.bundleIdentifier { lastExternalApp = app }
         model.enableLocalHistory()
         _ = updater
         makeMenu()
@@ -48,6 +53,7 @@ final class ChatPanel: NSPanel {
         model.resize = { [weak self] in self?.fit($0) }
         model.openSettings = { [weak self] in self?.showSettings() }
         model.presentFilePicker = { [weak self] in self?.showAttachmentPicker() }
+        model.attachFrontmostDocument = { [weak self] in self?.attachFrontmostDocument() }
         model.presentFolderPicker = { [weak self] in self?.showFolderPicker() }
         model.newConversation = { [weak self] in self?.newChat() }
         model.focusComposer = { [weak self] in self?.focusComposer() }
@@ -58,13 +64,24 @@ final class ChatPanel: NSPanel {
             self.model.preferences.shortcutKey = key; self.model.preferences.shortcutModifiers = modifiers; self.model.preferences.shortcutLabel = label
             return true
         }
+        model.updateAttachShortcut = { [weak self] key, modifiers, label in
+            guard let self, self.registerAttach(key, modifiers) else { return false }
+            self.model.preferences.attachShortcutKey = key; self.model.preferences.attachShortcutModifiers = modifiers; self.model.preferences.attachShortcutLabel = label
+            return true
+        }
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, pointer in
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, pointer in
             guard let pointer else { return noErr }
             let delegate = Unmanaged<AppDelegate>.fromOpaque(pointer).takeUnretainedValue()
-            MainActor.assumeIsolated { delegate.summon() }; return noErr
+            var hotKeyID = EventHotKeyID()
+            if let event { GetEventParameter(event, UInt32(kEventParamDirectObject), UInt32(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID) }
+            MainActor.assumeIsolated {
+                if hotKeyID.id == 2 { delegate.attachHotkeyPressed() } else { delegate.summon() }
+            }
+            return noErr
         }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &hotkeyHandler)
         let shortcutReady = register(model.preferences.shortcutKey, model.preferences.shortcutModifiers)
+        _ = registerAttach(model.preferences.attachShortcutKey, model.preferences.attachShortcutModifiers)
         summon()
         if !shortcutReady {
             model.error = "The global shortcut is in use. Quit the other Boltbar version or choose another shortcut in Settings."
@@ -110,6 +127,19 @@ final class ChatPanel: NSPanel {
         guard result == noErr else { return false }
         if let hotkey { UnregisterEventHotKey(hotkey) }; hotkey = next
         return true
+    }
+    func registerAttach(_ key: UInt32, _ modifiers: UInt32) -> Bool {
+        if attachHotkey != nil, key == model.preferences.attachShortcutKey, modifiers == model.preferences.attachShortcutModifiers { return true }
+        var next: EventHotKeyRef?
+        let result = RegisterEventHotKey(key, modifiers, EventHotKeyID(signature: 0x42424E41, id: 2), GetApplicationEventTarget(), 0, &next)
+        metric(["kind": "attach_hotkey", "status": result])
+        guard result == noErr else { return false }
+        if let attachHotkey { UnregisterEventHotKey(attachHotkey) }; attachHotkey = next
+        return true
+    }
+    @objc func attachHotkeyPressed() {
+        summon()
+        attachFrontmostDocument()
     }
     func fit(_ size: NSSize) {
         guard let panel, size.height > 0 else { return }
@@ -173,6 +203,7 @@ final class ChatPanel: NSPanel {
     /// ⌘N and the New chat menu items always start over.
     @objc func newChat() { present(newChat: true) }
     private func present(newChat: Bool) {
+        if let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier != Bundle.main.bundleIdentifier { lastExternalApp = app }
         model.selectingModel = false
         // A global shortcut must not reset the draft behind an open file sheet.
         if let attachmentPicker { attachmentPicker.makeKeyAndOrderFront(nil); return }
@@ -276,8 +307,43 @@ final class ChatPanel: NSPanel {
             }
         }
     }
+    @objc private func appActivated(_ note: Notification) {
+        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        if app.bundleIdentifier != Bundle.main.bundleIdentifier { lastExternalApp = app }
+    }
+
+    private func attachFrontmostDocument() {
+        guard AXIsProcessTrusted() else {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            AXIsProcessTrustedWithOptions(options)
+            model.error = "Allow Boltbar to control your computer in System Settings to attach the current file."
+            return
+        }
+        guard let app = lastExternalApp else {
+            model.error = "No previous app to read a document from."
+            return
+        }
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focused) == .success,
+              let window = focused else {
+            model.error = "Could not read the frontmost window."
+            return
+        }
+        let windowElement = window as! AXUIElement
+        var document: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(windowElement, kAXDocumentAttribute as CFString, &document) == .success,
+              let urlString = document as? String, let url = URL(string: urlString) else {
+            model.error = "The frontmost app did not expose a document."
+            return
+        }
+        model.addURLs([url])
+        panel.makeKeyAndOrderFront(nil)
+        model.focusComposer?()
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { summon(); return true }
-    func applicationWillTerminate(_ notification: Notification) { model.finish(); catalogTimer?.invalidate(); if let hotkey { UnregisterEventHotKey(hotkey) } }
+    func applicationWillTerminate(_ notification: Notification) { model.finish(); catalogTimer?.invalidate(); if let hotkey { UnregisterEventHotKey(hotkey) }; if let attachHotkey { UnregisterEventHotKey(attachHotkey) } }
 }
 
 @main struct BoltbarApplication {

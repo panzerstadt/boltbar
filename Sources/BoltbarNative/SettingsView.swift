@@ -132,6 +132,7 @@ struct SettingsView: View {
                 InterfacePicker(label: "Model", selection: $model.defaultModel, options: [ModelChoice?.none] + model.selectableModels.map { Optional($0) }, title: { $0.map { modelTitle($0.model) } ?? "Latest used" })
                 InterfacePicker(label: "Thinking effort", selection: $model.preferences.effort, options: Effort.allCases, title: { $0.title })
                 HStack { Text("Global shortcut"); Spacer(); ShortcutRecorder(model: model).frame(width: 180, height: 28) }
+            HStack { Text("Attach current file"); Spacer(); AttachShortcutRecorder(model: model).frame(width: 180, height: 28) }
                 Text("A summon starts a new conversation, or brings back the current one while a reply streams, messages are queued or a reply finished while the bar was hidden. Escape hides the bar; ⌘N always starts fresh; ⌘, opens Settings.").font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             ModelSettingsView(model: model)
@@ -247,6 +248,19 @@ struct ShortcutRecorder: NSViewRepresentable {
         return button
     }
     func updateNSView(_ button: ShortcutButton, context: Context) { if !button.recording { button.title = model.preferences.shortcutLabel } }
+}
+
+struct AttachShortcutRecorder: NSViewRepresentable {
+    @ObservedObject var model: ChatModel
+    func makeNSView(context: Context) -> ShortcutButton {
+        let button = ShortcutButton(title: model.preferences.attachShortcutLabel, target: nil, action: nil)
+        button.bezelStyle = .rounded
+        button.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        button.record = { model.updateAttachShortcut?($0, $1, $2) ?? false }
+        button.setAccessibilityLabel("Record attach shortcut")
+        return button
+    }
+    func updateNSView(_ button: ShortcutButton, context: Context) { if !button.recording { button.title = model.preferences.attachShortcutLabel } }
 }
 
 /// Agent mode: its shortcut, how long full access lasts, and the project folders.
