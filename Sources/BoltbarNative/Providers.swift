@@ -132,12 +132,15 @@ enum Providers {
     }
 
     static func streamDeepSeek(_ request: ChatRequest, update: @escaping (StreamUpdate) async -> Void) async throws {
-        if request.webSearch { throw AppError("DeepSeek does not support web search.") }
         if request.transport == .cli { throw AppError("DeepSeek uses an API key. Select API key in Settings.") }
         let key = try Keychain.key(.deepseek)
         if request.transport == .automatic && key == nil { throw AppError("Add a DeepSeek API key in Settings.") }
         guard let key, !key.isEmpty else { throw AppError("Add a DeepSeek API key in Settings.") }
+
         var messages: [[String: Any]] = []
+        if request.webSearch {
+            messages.append(["role": "system", "content": "You can search the web with web_search and read pages with web_fetch. Use them when needed, then answer with Markdown links to sources."])
+        }
         for message in request.messages {
             var text = message.text
             for file in message.attachments {
@@ -146,32 +149,124 @@ enum Providers {
             }
             messages.append(["role": message.role.rawValue, "content": text])
         }
-        let body: [String: Any] = ["model": request.model, "stream": true, "messages": messages]
-        let url = URL(string: "https://api.deepseek.com/chat/completions")!
-        var http = URLRequest(url: url)
-        http.httpMethod = "POST"
-        http.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        http.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        http.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 600; config.timeoutIntervalForResource = 3600
-        let session = URLSession(configuration: config)
-        defer { session.invalidateAndCancel() }
-        let (bytes, response) = try await session.bytes(for: http)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        metric(["kind": "headers", "provider": "deepseek", "status": status])
-        guard (200..<300).contains(status) else { throw AppError("DeepSeek returned HTTP \(status). Check the key, model access, and quota in Settings.") }
-        var frames = EventFrames()
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            guard let data = try frames.consume(byte: byte) else { continue }
-            if data == "[DONE]" { return }
-            guard let json = data.data(using: .utf8), let event = try JSONSerialization.jsonObject(with: json) as? [String: Any] else { continue }
-            if let error = event["error"] as? [String: Any], let message = error["message"] as? String { throw AppError(message) }
-            guard let choices = event["choices"] as? [[String: Any]], let delta = choices.first?["delta"] as? [String: Any] else { continue }
-            if let content = delta["content"] as? String, !content.isEmpty { await update(.text(content)) }
+
+        let tools: [[String: Any]]? = request.webSearch ? [
+            ["type": "function", "function": ["name": "web_search", "description": "Search the web for a query and return ranked results.", "parameters": ["type": "object", "properties": ["query": ["type": "string"], "count": ["type": "integer"]], "required": ["query"]]]],
+            ["type": "function", "function": ["name": "web_fetch", "description": "Fetch a web page and return its Markdown content.", "parameters": ["type": "object", "properties": ["url": ["type": "string"]], "required": ["url"]]]]
+        ] : nil
+
+        struct ToolCall { var id = ""; var name = ""; var arguments = "" }
+        for _ in 0..<6 {
+            var toolCalls: [ToolCall] = []
+            var frames = EventFrames()
+            var body: [String: Any] = ["model": request.model, "stream": true, "messages": messages]
+            if let tools { body["tools"] = tools }
+            let url = URL(string: "https://api.deepseek.com/chat/completions")!
+            var http = URLRequest(url: url)
+            http.httpMethod = "POST"
+            http.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            http.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            http.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = 600; config.timeoutIntervalForResource = 3600
+            let session = URLSession(configuration: config)
+            defer { session.invalidateAndCancel() }
+            let (bytes, response) = try await session.bytes(for: http)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            metric(["kind": "headers", "provider": "deepseek", "status": status])
+            guard (200..<300).contains(status) else { throw AppError("DeepSeek returned HTTP \(status). Check the key, model access, and quota in Settings.") }
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                guard let data = try frames.consume(byte: byte) else { continue }
+                if data == "[DONE]" { break }
+                guard let json = data.data(using: .utf8), let event = try JSONSerialization.jsonObject(with: json) as? [String: Any] else { continue }
+                if let error = event["error"] as? [String: Any], let message = error["message"] as? String { throw AppError(message) }
+                guard let choices = event["choices"] as? [[String: Any]], let choice = choices.first else { continue }
+                guard let delta = choice["delta"] as? [String: Any] else { continue }
+                if let reasoning = delta["reasoning_content"] as? String, !reasoning.isEmpty { await update(.activity("Thinking…")) }
+                if let content = delta["content"] as? String, !content.isEmpty { await update(.text(content)) }
+                if let tcs = delta["tool_calls"] as? [[String: Any]] {
+                    for tc in tcs {
+                        let idx = tc["index"] as? Int ?? 0
+                        while toolCalls.count <= idx { toolCalls.append(ToolCall()) }
+                        if let id = tc["id"] as? String { toolCalls[idx].id = id }
+                        if let fn = tc["function"] as? [String: Any] {
+                            if let name = fn["name"] as? String { toolCalls[idx].name = name }
+                            if let args = fn["arguments"] as? String { toolCalls[idx].arguments += args }
+                        }
+                    }
+                }
+            }
+            if toolCalls.isEmpty { return }
+            var assistantToolCalls: [[String: Any]] = []
+            for tc in toolCalls {
+                assistantToolCalls.append(["id": tc.id, "type": "function", "function": ["name": tc.name, "arguments": tc.arguments]])
+            }
+            messages.append(["role": "assistant", "content": NSNull(), "tool_calls": assistantToolCalls])
+            for tc in toolCalls {
+                await update(.activity(tc.name == "web_search" ? "Searching the web…" : "Reading web page…"))
+                let parsed = try? JSONSerialization.jsonObject(with: Data(tc.arguments.utf8))
+                let args = parsed as? [String: Any] ?? [:]
+                let result: String
+                do {
+                    if tc.name == "web_search" {
+                        result = try await deepSeekSearch(key: key, query: args["query"] as? String ?? "", count: args["count"] as? Int ?? 8)
+                    } else if tc.name == "web_fetch" {
+                        result = try await deepSeekFetch(key: key, url: args["url"] as? String ?? "")
+                    } else {
+                        result = "Unknown tool"
+                    }
+                } catch {
+                    result = "Tool failed: \(error.localizedDescription)"
+                }
+                messages.append(["role": "tool", "tool_call_id": tc.id, "content": result])
+            }
         }
-        throw AppError("The connection ended before the response completed.")
+    }
+
+    static func deepSeekSearch(key: String, query: String, count: Int) async throws -> String {
+        let url = URL(string: "https://api.deepseek.com/v1/tools/search")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        let body: [String: Any] = ["query": query, "count": min(max(count, 1), 50), "need_content": true]
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let (data, resp) = try await session.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw AppError("DeepSeek search failed.") }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any], let results = json["results"] as? [[String: Any]] else { return "No results." }
+        if results.isEmpty { return "No results." }
+        var out = ""
+        for (i, r) in results.enumerated() {
+            let title = r["title"] as? String ?? ""
+            let u = r["url"] as? String ?? ""
+            let snippet = r["snippet"] as? String ?? ""
+            let summary = r["summary"] as? String ?? ""
+            let content = r["content"] as? String ?? ""
+            out += "[\(i+1)] \(title)\nURL: \(u)\nSnippet: \(snippet)\nSummary: \(summary)\n"
+            if !content.isEmpty { out += "Content: \(String(content.prefix(1500)))\n" }
+            out += "\n"
+        }
+        return String(out.prefix(16000))
+    }
+
+    static func deepSeekFetch(key: String, url: String) async throws -> String {
+        let endpoint = URL(string: "https://api.deepseek.com/v1/tools/fetch")!
+        var req = URLRequest(url: endpoint)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["url": url])
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let (data, resp) = try await session.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw AppError("DeepSeek fetch failed.") }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "No content." }
+        let title = json["title"] as? String ?? ""
+        let content = json["content"] as? String ?? ""
+        return "Title: \(title)\n\(String(content.prefix(12000)))"
     }
 
     static func textDelta(_ event: [String: Any]) -> String? {
