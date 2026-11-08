@@ -12,7 +12,9 @@ struct ModelChoice: Codable, Hashable, Identifiable {
         .init(provider: .anthropic, model: "claude-sonnet-5-5"),
         .init(provider: .anthropic, model: "claude-opus-5-5"),
         .init(provider: .anthropic, model: "claude-haiku-5-5"),
-        .init(provider: .anthropic, model: "claude-fable-5-1")
+        .init(provider: .anthropic, model: "claude-fable-5-1"),
+        .init(provider: .deepseek, model: "deepseek-chat"),
+        .init(provider: .deepseek, model: "deepseek-reasoner")
     ]
     var otherVersion: Bool {
         model.range(of: "[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{8}|preview|experimental|latest", options: .regularExpression) != nil

@@ -136,6 +136,7 @@ import SwiftUI
         self.agentMode = defaults.bool(forKey: "agentModeEnabled")
         preferences = defaults.data(forKey: "preferences").flatMap { try? JSONDecoder().decode(Preferences.self, from: $0) } ?? Preferences()
         preferences.models.removeValue(forKey: "cursor"); preferences.transports.removeValue(forKey: "cursor")
+        if preferences.provider == .deepseek { agentMode = false }
         if let saved = defaults.data(forKey: "agentSettings").flatMap({ try? JSONDecoder().decode(AgentSettings.self, from: $0) }) { agentSettings = saved }
         if agentSettings.projects.isEmpty { agentSettings = AgentSettings() }
         agentSettings.expireFullAccess()
@@ -153,6 +154,7 @@ import SwiftUI
     }
     func selectModel(_ choice: ModelChoice) {
         preferences.provider = choice.provider; preferences.models[choice.provider.rawValue] = choice.model
+        if choice.provider == .deepseek { agentMode = false }
     }
     func addModel(_ choice: ModelChoice) {
         guard choice.provider.accepts(choice.model), !modelList.contains(choice) else { return }
@@ -188,7 +190,7 @@ import SwiftUI
     }
     var queuePaused: Bool { queueHeld || editingQueuedID != nil }
     var hasDraft: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty }
-    var canSearchWeb: Bool { provider == .anthropic || preferences.transport(provider) != .cli }
+    var canSearchWeb: Bool { provider == .anthropic || provider == .deepseek || (provider == .openai && preferences.transport(provider) != .cli) }
     /// Web search stays off in agent mode: web content plus tools is how data leaves a machine.
     var webSearchActive: Bool { webSearch && canSearchWeb && !agentMode }
     var agentProject: AgentProject? { agentSettings.selectedProject }
@@ -227,6 +229,7 @@ import SwiftUI
     /// ⌘J and the terminal button. Turning it on selects the chip, so the arrows adjust it at once;
     /// ↵ on the chip keeps it selected either way, so ↵ again flips it back.
     func toggleAgentMode(keepingSelection: Bool = false) {
+        guard provider != .deepseek else { return }
         agentMode.toggle()
         selectingModel = false; showingModelPicker = false; pendingProjectRemoval = nil; pendingFullAccess = nil
         selectingAgent = agentMode || keepingSelection; showingAgentPicker = false

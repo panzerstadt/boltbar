@@ -81,6 +81,7 @@ enum Providers {
 
     static func stream(_ request: ChatRequest, update: @escaping (StreamUpdate) async -> Void) async throws {
         if let agent = request.agent { try await Agent.stream(request, agent: agent, update: update); return }
+        if request.provider == .deepseek { try await streamDeepSeek(request, update: update); return }
         if request.webSearch && request.provider == .openai && request.transport == .cli {
             throw AppError("Web search needs OpenAI with an API key. Select OpenAI and API key or Automatic in Settings.")
         }
@@ -130,6 +131,49 @@ enum Providers {
         throw AppError("The connection ended before the response completed.")
     }
 
+    static func streamDeepSeek(_ request: ChatRequest, update: @escaping (StreamUpdate) async -> Void) async throws {
+        if request.webSearch { throw AppError("DeepSeek does not support web search.") }
+        if request.transport == .cli { throw AppError("DeepSeek uses an API key. Select API key in Settings.") }
+        let key = try Keychain.key(.deepseek)
+        if request.transport == .automatic && key == nil { throw AppError("Add a DeepSeek API key in Settings.") }
+        guard let key, !key.isEmpty else { throw AppError("Add a DeepSeek API key in Settings.") }
+        var messages: [[String: Any]] = []
+        for message in request.messages {
+            var text = message.text
+            for file in message.attachments {
+                if let contents = file.text { text += "\n\nAttached document: \(file.name)\n\(contents)" }
+                else { text += "\n\n[Attachment not supported by DeepSeek: \(file.name)]" }
+            }
+            messages.append(["role": message.role.rawValue, "content": text])
+        }
+        let body: [String: Any] = ["model": request.model, "stream": true, "messages": messages]
+        let url = URL(string: "https://api.deepseek.com/chat/completions")!
+        var http = URLRequest(url: url)
+        http.httpMethod = "POST"
+        http.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        http.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        http.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 600; config.timeoutIntervalForResource = 3600
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let (bytes, response) = try await session.bytes(for: http)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        metric(["kind": "headers", "provider": "deepseek", "status": status])
+        guard (200..<300).contains(status) else { throw AppError("DeepSeek returned HTTP \(status). Check the key, model access, and quota in Settings.") }
+        var frames = EventFrames()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard let data = try frames.consume(byte: byte) else { continue }
+            if data == "[DONE]" { return }
+            guard let json = data.data(using: .utf8), let event = try JSONSerialization.jsonObject(with: json) as? [String: Any] else { continue }
+            if let error = event["error"] as? [String: Any], let message = error["message"] as? String { throw AppError(message) }
+            guard let choices = event["choices"] as? [[String: Any]], let delta = choices.first?["delta"] as? [String: Any] else { continue }
+            if let content = delta["content"] as? String, !content.isEmpty { await update(.text(content)) }
+        }
+        throw AppError("The connection ended before the response completed.")
+    }
+
     static func textDelta(_ event: [String: Any]) -> String? {
         switch event["type"] as? String {
         case "response.output_text.delta": return event["delta"] as? String
@@ -142,9 +186,9 @@ enum Providers {
     static func catalog(_ provider: Provider, transport: Transport, cli: CLIStatus) async -> Catalog {
         do {
             if transport != .cli, let key = try Keychain.key(provider) {
-                let url = provider == .openai ? "https://api.openai.com/v1/models" : "https://api.anthropic.com/v1/models"
+                let url = provider == .openai ? "https://api.openai.com/v1/models" : (provider == .deepseek ? "https://api.deepseek.com/models" : "https://api.anthropic.com/v1/models")
                 var request = URLRequest(url: URL(string: url)!); request.timeoutInterval = 10
-                if provider == .openai { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
+                if provider == .openai || provider == .deepseek { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
                 else { request.setValue(key, forHTTPHeaderField: "x-api-key"); request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version") }
                 let session = URLSession(configuration: .ephemeral)
                 defer { session.invalidateAndCancel() }
@@ -169,6 +213,7 @@ enum Providers {
                 return Catalog(models: ids, detail: "API · synced catalog", ready: true, live: true)
             }
             guard transport != .api else { throw AppError("Add an API key in Settings.") }
+            if provider == .deepseek { throw AppError("DeepSeek uses an API key. Select API key in Settings.") }
             switch cli {
             case .signedIn: return Catalog(models: provider.defaults, detail: "CLI login · fallback catalog", ready: true)
             case .missing: throw AppError("Install the official \(provider.title) CLI, then run \(provider.loginCommand).")

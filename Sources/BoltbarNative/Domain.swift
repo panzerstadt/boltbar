@@ -4,7 +4,7 @@ import Security
 import LocalAuthentication
 
 enum Provider: String, Codable, CaseIterable, Identifiable {
-    case openai, anthropic
+    case openai, anthropic, deepseek
     // Read legacy chats/preferences without keeping the removed integration.
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -16,23 +16,25 @@ enum Provider: String, Codable, CaseIterable, Identifiable {
         self = provider
     }
     var id: String { rawValue }
-    var title: String { ["openai": "OpenAI", "anthropic": "Anthropic"][rawValue]! }
+    var title: String { ["openai": "OpenAI", "anthropic": "Anthropic", "deepseek": "DeepSeek"][rawValue]! }
     var defaults: [String] {
         switch self {
         case .openai: return FeaturedModels.fallback
         case .anthropic: return ["claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1", "claude-haiku-5-5"]
+        case .deepseek: return ["deepseek-chat", "deepseek-reasoner"]
         }
     }
     var loginCommand: String {
-        switch self { case .openai: return "codex login"; case .anthropic: return "claude auth login" }
+        switch self { case .openai: return "codex login"; case .anthropic: return "claude auth login"; case .deepseek: return "not supported" }
     }
-    var cliName: String { self == .openai ? "Codex CLI" : "Claude Code" }
+    var cliName: String { self == .openai ? "Codex CLI" : (self == .anthropic ? "Claude Code" : "API only") }
     func accepts(_ model: String) -> Bool {
         let id = model.lowercased()
         if ["audio", "realtime", "embed", "transcrib", "tts", "image", "search", "moderation", "codex", "deep-research", "-pro", "instruct"].contains(where: id.contains) { return false }
         switch self {
         case .openai: return id.range(of: "^gpt-[5-9][0-9]*([.-]|$)|^gpt-4[.]1([.-]|$)|^gpt-4o(-|$)|^o[34](-|$)", options: .regularExpression) != nil
         case .anthropic: return id.range(of: "^claude-(sonnet|opus|haiku|fable)-(4-[6-9]|[5-9])(-|$)", options: .regularExpression) != nil
+        case .deepseek: return id.range(of: "^deepseek-", options: .regularExpression) != nil
         }
     }
 }
@@ -191,7 +193,8 @@ enum Keychain {
 func modelTitle(_ id: String) -> String {
     if let parts = FeaturedModels.parts(id) { return "GPT-\(parts.version.map(String.init).joined(separator: ".")) \(parts.family.capitalized)" }
     let known = ["gpt-6.1-sol": "GPT-6.1 Sol", "gpt-6-astra": "GPT-6 Astra", "gpt-6-luna": "GPT-6 Luna", "gpt-6-sol": "GPT-6 Sol",
-        "claude-sonnet-5-5": "Claude Sonnet 5.5", "claude-opus-5-5": "Claude Opus 5.5", "claude-fable-5-1": "Claude Fable 5.1", "claude-haiku-5-5": "Claude Haiku 5.5", "auto": "Auto"]
+        "claude-sonnet-5-5": "Claude Sonnet 5.5", "claude-opus-5-5": "Claude Opus 5.5", "claude-fable-5-1": "Claude Fable 5.1", "claude-haiku-5-5": "Claude Haiku 5.5", "auto": "Auto",
+        "deepseek-chat": "DeepSeek Chat", "deepseek-reasoner": "DeepSeek Reasoner"]
     return known[id] ?? id
 }
 

@@ -51,7 +51,7 @@ final class AppearanceTests: XCTestCase {
         XCTAssertNil(model.preferences.models["cursor"]); XCTAssertNil(model.preferences.transports["cursor"])
         XCTAssertEqual(model.preferences.models["anthropic"], "claude-sonnet-5-5")
         XCTAssertEqual(model.preferences.shortcutLabel, "⌘ Space")
-        XCTAssertEqual(Provider.allCases, [.openai, .anthropic])
+        XCTAssertEqual(Provider.allCases, [.openai, .anthropic, .deepseek])
         model.appearance.mode = .system; model.appearance.lightTheme = .mist
         model.appearance.darkTheme = .midnight; model.appearance.customAccent = "5638AA"
         XCTAssertEqual(ChatModel(defaults: defaults).appearance, model.appearance)

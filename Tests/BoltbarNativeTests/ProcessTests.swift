@@ -4,7 +4,7 @@ import XCTest
 final class ProcessTests: XCTestCase {
     func testAllCLITransportsKeepLargeDocumentsOffArgumentList() throws {
         let document = try Attachment(name: "large.txt", mime: "text/plain", data: Data(repeating: 65, count: 1_048_576))
-        for provider in Provider.allCases {
+        for provider in Provider.allCases where provider != .deepseek {
             let request = ChatRequest(provider: provider, model: provider.defaults[0], effort: .low, transport: .cli,
                 messages: [Message(role: .user, text: "Summarize", attachments: [document])])
             let arguments: [String], input: Data

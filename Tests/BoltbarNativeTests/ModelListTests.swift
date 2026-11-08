@@ -7,7 +7,7 @@ final class ModelListTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: name) }
         defaults.set(["gpt-4.1", "gpt-6-sol"], forKey: "catalog.openai")
         let model = ChatModel(defaults: defaults)
-        XCTAssertEqual(model.modelList.map(\.model), ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna", "claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "claude-fable-5-1"])
+        XCTAssertEqual(model.modelList.map(\.model), ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna", "claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "claude-fable-5-1", "deepseek-chat", "deepseek-reasoner"])
         XCTAssertNil(model.defaultModel)
     }
     @MainActor func testListPersistsOrderAndProtectsLastChoice() {
