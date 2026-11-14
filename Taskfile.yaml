@@ -2,10 +2,15 @@ version: '3'
 
 tasks:
   build:
-    desc: Build the native app bundle and launch it
+    desc: Build the native app bundle (ad hoc signed) and launch it
     cmds:
       - sh scripts/build-native.sh
       - open build/Boltbar.app
+
+  build-universal:
+    desc: Build a universal (arm64 + x86_64) app bundle, ad hoc signed
+    cmds:
+      - BOLTBAR_UNIVERSAL=1 sh scripts/build-native.sh
 
   test:
     desc: Run the Swift test suite
@@ -16,6 +21,16 @@ tasks:
     desc: Launch the already-built app
     cmds:
       - open build/Boltbar.app
+
+  dmg:
+    desc: Build an ad-hoc (unsigned) DMG for local use only
+    cmds:
+      - sh scripts/build-dmg.sh
+
+  package:
+    desc: Build a notarized universal release (ZIP + DMG + appcast + SHA256SUMS). Requires BOLTBAR_SIGN_IDENTITY and BOLTBAR_NOTARY_PROFILE env vars.
+    cmds:
+      - sh scripts/package-release.sh
 
   clean:
     desc: Remove build artifacts

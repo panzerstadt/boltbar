@@ -57,8 +57,45 @@ A universal app containing Apple Silicon and Intel code:
 ```sh
 BOLTBAR_UNIVERSAL=1 sh scripts/build-native.sh
 ```
+or, via Task:
+```sh
+task build-universal
+```
 
 The default build uses an ad hoc signature. For local development, supply an existing signing identity with `BOLTBAR_SIGN_IDENTITY`. Public distribution needs a **Developer ID Application** certificate and notarization; an Apple Development signature is not a substitute.
+
+### Distributing a DMG
+
+This is an SPM executable target, not an Xcode app project. Xcode’s “Archive → Distribute as file” exports a bare binary, which fails to load `Sparkle.framework` (the error references `/Applications/Boltbar` instead of `Boltbar.app`). Always build the app bundle with the scripts instead.
+
+**Local-only DMG (ad hoc, unsigned):**
+```sh
+task dmg
+```
+or manually:
+```sh
+sh scripts/build-native.sh
+STAGE=$(mktemp -d)
+ditto build/Boltbar.app "$STAGE/Boltbar.app"
+ln -s /Applications "$STAGE/Applications"
+hdiutil create -volname Boltbar -srcfolder "$STAGE" -fs HFS+ -format UDZO build/Boltbar.dmg
+rm -rf "$STAGE"
+```
+Gatekeeper will block this DMG for other users; use it only on your own machine.
+
+**Public DMG (Developer ID signed + notarized):**
+Prereqs: a Developer ID Application certificate in the login Keychain and a notarytool profile (`xcrun notarytool store-credentials boltbar-notary`).
+```sh
+BOLTBAR_SIGN_IDENTITY='Developer ID Application: ... (TEAMID)' \
+BOLTBAR_NOTARY_PROFILE=boltbar-notary \
+BOLTBAR_VERSION=0.7.4 BOLTBAR_BUILD=0.7.4 \
+task package
+```
+(or run `sh scripts/package-release.sh` directly.)
+
+This builds a universal app, signs Sparkle’s nested helpers inside-out with the hardened runtime, notarizes and staples the app, creates `build/releases/v<VERSION>/Boltbar-<VERSION>-universal.zip` and `Boltbar_<VERSION>_universal.dmg`, notarizes and staples the DMG, generates the Sparkle `appcast.xml`, and writes `SHA256SUMS`. It never publishes anything.
+
+Publish all four artifacts (ZIP, DMG, `appcast.xml`, `SHA256SUMS`) together in the matching GitHub release.
 
 From this checkout, `sh install.sh` builds and installs the native app. It preserves an existing installation as a timestamped backup and preserves quarantine metadata.
 
