@@ -90,7 +90,7 @@ import SwiftUI
     var resize: ((NSSize) -> Void)?
     var openSettings: (() -> Void)?
     var presentFilePicker: (() -> Void)?
-    var attachFrontmostDocument: (() -> Void)?
+    var attachFrontmostContext: (() -> Void)?
     var presentFolderPicker: (() -> Void)?
     var newConversation: (() -> Void)?
     var focusComposer: (() -> Void)?
@@ -366,7 +366,7 @@ import SwiftUI
 
     // MARK: Help and commands
 
-    static let commands = ["/help", "/new", "/agent", "/terminal", "/attach"]
+    static let commands = ["/help", "/new", "/agent", "/terminal", "/attach", "/context", "/terminal-context"]
     /// Commands run locally and are never sent to a model.
     private func runCommand(_ text: String) -> Bool {
         switch text.lowercased() {
@@ -374,7 +374,9 @@ import SwiftUI
         case "/new": newConversation?()
         case "/agent": toggleAgentMode()
         case "/terminal": copyTerminalCommand()
-        case "/attach": attachCurrentFile()
+        case "/attach": attachContext()
+        case "/context": attachContext()
+        case "/terminal-context": attachContext()
         default: return false
         }
         return true
@@ -766,8 +768,8 @@ import SwiftUI
     func pickFiles() {
         presentFilePicker?()
     }
-    func attachCurrentFile() {
-        attachFrontmostDocument?()
+    func attachContext() {
+        attachFrontmostContext?()
     }
     func receive(_ pasteboard: NSPasteboard) -> Bool {
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {

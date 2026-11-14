@@ -9,6 +9,16 @@ private struct SizeKey: PreferenceKey {
 struct AttachmentTile: View {
     @Environment(\.boltbarTheme) private var theme
     private var accent: Color { theme.accent }
+    private var preview: String {
+        if attachment.isImage { return "\\(attachment.name) (image, \\(attachment.data.count) bytes)" }
+        if let text = attachment.text {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let snippet = trimmed.prefix(400)
+            return snippet.isEmpty ? attachment.name : String(snippet)
+        }
+        if attachment.isPDF { return "\\(attachment.name) (PDF, \\(attachment.data.count) bytes)" }
+        return attachment.name
+    }
     let attachment: Attachment
     var remove: (() -> Void)? = nil
     @State private var expanded = false
@@ -31,6 +41,7 @@ struct AttachmentTile: View {
         }
         .background(theme.surface).clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.border, lineWidth: 1))
+        .help(preview)
         .overlay(alignment: .topTrailing) {
             if let remove {
                 Button(action: remove) { Image(systemName: "xmark").font(.system(size: 9, weight: .bold, design: .monospaced)).frame(width: 20, height: 20).background(theme.background, in: Circle()) }

@@ -53,7 +53,7 @@ final class ChatPanel: NSPanel {
         model.resize = { [weak self] in self?.fit($0) }
         model.openSettings = { [weak self] in self?.showSettings() }
         model.presentFilePicker = { [weak self] in self?.showAttachmentPicker() }
-        model.attachFrontmostDocument = { [weak self] in self?.attachFrontmostDocument() }
+        model.attachFrontmostContext = { [weak self] in self?.attachFrontmostContext() }
         model.presentFolderPicker = { [weak self] in self?.showFolderPicker() }
         model.newConversation = { [weak self] in self?.newChat() }
         model.focusComposer = { [weak self] in self?.focusComposer() }
@@ -139,7 +139,7 @@ final class ChatPanel: NSPanel {
     }
     @objc func attachHotkeyPressed() {
         summon()
-        attachFrontmostDocument()
+        attachFrontmostContext()
     }
     func fit(_ size: NSSize) {
         guard let panel, size.height > 0 else { return }
@@ -312,34 +312,74 @@ final class ChatPanel: NSPanel {
         if app.bundleIdentifier != Bundle.main.bundleIdentifier { lastExternalApp = app }
     }
 
-    private func attachFrontmostDocument() {
+    private func attachFrontmostContext() {
         guard AXIsProcessTrusted() else {
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
             AXIsProcessTrustedWithOptions(options)
-            model.error = "Allow Boltbar to control your computer in System Settings to attach the current file."
+            model.error = "Allow Boltbar to control your computer in System Settings to attach context."
             return
         }
         guard let app = lastExternalApp else {
-            model.error = "No previous app to read a document from."
+            model.error = "No previous app to read context from."
             return
         }
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
-        var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focused) == .success,
-              let window = focused else {
-            model.error = "Could not read the frontmost window."
+
+        // 1. A document URL (text editors, IDEs).
+        var focusedWindow: CFTypeRef?
+        if AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindow) == .success,
+           let window = focusedWindow {
+            let windowElement = window as! AXUIElement
+            var document: CFTypeRef?
+            if AXUIElementCopyAttributeValue(windowElement, kAXDocumentAttribute as CFString, &document) == .success,
+               let urlString = document as? String, let url = URL(string: urlString) {
+                model.addURLs([url])
+                panel.makeKeyAndOrderFront(nil)
+                model.focusComposer?()
+                return
+            }
+        }
+
+        // 2. Selected text (terminals, browsers, editors without a document URL).
+        var focusedElement: CFTypeRef?
+        if AXUIElementCopyAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString, &focusedElement) == .success,
+           let element = focusedElement {
+            let axElement = element as! AXUIElement
+            var selected: CFTypeRef?
+            if AXUIElementCopyAttributeValue(axElement, kAXSelectedTextAttribute as CFString, &selected) == .success,
+               let text = selected as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                do {
+                    try model.add([Attachment(name: "Context.txt", mime: "text/plain", data: Data(text.utf8))])
+                } catch { model.error = error.localizedDescription; return }
+                panel.makeKeyAndOrderFront(nil)
+                model.focusComposer?()
+                return
+            }
+            // 3. Whole value as a fallback (some text views expose all text).
+            var value: CFTypeRef?
+            if AXUIElementCopyAttributeValue(axElement, kAXValueAttribute as CFString, &value) == .success,
+               let text = value as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let trimmed = String(text.prefix(200_000))
+                do {
+                    try model.add([Attachment(name: "Context.txt", mime: "text/plain", data: Data(trimmed.utf8))])
+                } catch { model.error = error.localizedDescription; return }
+                panel.makeKeyAndOrderFront(nil)
+                model.focusComposer?()
+                return
+            }
+        }
+
+        // 4. Clipboard fallback.
+        if let clip = NSPasteboard.general.string(forType: .string), !clip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            do {
+                try model.add([Attachment(name: "Clipboard.txt", mime: "text/plain", data: Data(clip.utf8))])
+            } catch { model.error = error.localizedDescription; return }
+            panel.makeKeyAndOrderFront(nil)
+            model.focusComposer?()
             return
         }
-        let windowElement = window as! AXUIElement
-        var document: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(windowElement, kAXDocumentAttribute as CFString, &document) == .success,
-              let urlString = document as? String, let url = URL(string: urlString) else {
-            model.error = "The frontmost app did not expose a document."
-            return
-        }
-        model.addURLs([url])
-        panel.makeKeyAndOrderFront(nil)
-        model.focusComposer?()
+
+        model.error = "The frontmost app did not expose a document or selected text."
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { summon(); return true }

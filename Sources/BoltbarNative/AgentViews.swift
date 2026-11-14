@@ -207,7 +207,7 @@ struct ToolRoll: View {
             .help(model.agentMode ? "Web search is off in agent mode" : model.canSearchWeb ? (model.webSearch ? "Web access on · searches when needed" : "Allow web search · remembers your choice") : "Web search with Codex requires an OpenAI API key")
     }
     private var attach: some View {
-        Button { model.attachCurrentFile() } label: {
+        Button { model.attachContext() } label: {
             Image(systemName: "doc.on.clipboard").font(.system(size: 14)).foregroundStyle(.secondary).frame(width: 30, height: 30)
         }.buttonStyle(.plain).help("Attach the frontmost app's current document").accessibilityLabel("Attach current file")
     }
